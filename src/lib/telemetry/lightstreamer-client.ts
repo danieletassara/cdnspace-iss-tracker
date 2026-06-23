@@ -415,12 +415,13 @@ export async function connectLightstreamer(
         const tsStr = update.getValue("TimeStamp");
         const timestamp = tsStr ? parseFloat(tsStr) * 1000 : Date.now();
 
-        latestChannels = {
-          ...latestChannels,
-          [item]: { value, status, timestamp },
-        };
+        // Mutate the map in place — NASA pushes many of the ~290 channels per
+        // second; copying the whole map on every item update (and again for
+        // onUpdate) was an O(N) allocation hotspot. Consumers derive from a
+        // copy via getLatestChannels(), so the live reference is fine here.
+        latestChannels[item] = { value, status, timestamp };
 
-        onUpdate({ ...latestChannels });
+        onUpdate(latestChannels);
 
         updateCount++;
         if (updateCount <= 5 || updateCount % 200 === 0) {
@@ -500,12 +501,10 @@ async function connectLightstreamerFallback(
       const tsStr = update.getValue("TimeStamp");
       const timestamp = tsStr ? parseFloat(tsStr) * 1000 : Date.now();
 
-      latestChannels = {
-        ...latestChannels,
-        [item]: { value, status, timestamp },
-      };
+      // Mutate in place — see the primary handler above for rationale.
+      latestChannels[item] = { value, status, timestamp };
 
-      onUpdate({ ...latestChannels });
+      onUpdate(latestChannels);
 
       updateCount++;
       if (updateCount <= 5 || updateCount % 200 === 0) {

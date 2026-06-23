@@ -23,11 +23,16 @@ export class TelemetryCache {
     };
   }
 
-  /** Lightweight payload sent every second (no crew/solar/event/docking) */
+  /**
+   * Lightweight payload sent every second (no crew/solar/docking — those ride
+   * their own SSE events). activeEvent IS included so already-connected clients
+   * see event transitions live, not only on reconnect.
+   */
   getTickPayload() {
     return {
       orbital: this.orbital,
       telemetry: this.telemetry,
+      activeEvent: this.activeEvent,
       visitorCount: this.visitorCount,
     };
   }

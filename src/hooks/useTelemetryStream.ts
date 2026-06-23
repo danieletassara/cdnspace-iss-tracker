@@ -40,6 +40,7 @@ export function useTelemetryStream(enabled: boolean = true): TelemetryStreamStat
 
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stableTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const unmountedRef = useRef(false);
 
@@ -56,8 +57,15 @@ export function useTelemetryStream(enabled: boolean = true): TelemetryStreamStat
 
       es.addEventListener("open", () => {
         if (unmountedRef.current) return;
-        retryCountRef.current = 0;
         setState((prev) => ({ ...prev, connected: true, reconnecting: false }));
+        // Reset the backoff only once the connection has proven stable. A
+        // server that accepts the connection then immediately errors would
+        // otherwise reset the counter to 0 on every "open" and produce a tight
+        // 1s reconnect loop instead of backing off.
+        if (stableTimerRef.current !== null) clearTimeout(stableTimerRef.current);
+        stableTimerRef.current = setTimeout(() => {
+          retryCountRef.current = 0;
+        }, 10_000);
       });
 
       es.addEventListener("telemetry", (e: MessageEvent) => {
@@ -85,16 +93,6 @@ export function useTelemetryStream(enabled: boolean = true): TelemetryStreamStat
         try {
           const solar = JSON.parse(e.data as string) as SolarActivity;
           setState((prev) => ({ ...prev, solar: solar ?? prev.solar }));
-        } catch {
-          // ignore malformed events
-        }
-      });
-
-      es.addEventListener("event", (e: MessageEvent) => {
-        if (unmountedRef.current) return;
-        try {
-          const activeEvent = JSON.parse(e.data as string) as ISSEvent | null;
-          setState((prev) => ({ ...prev, activeEvent }));
         } catch {
           // ignore malformed events
         }
@@ -135,6 +133,10 @@ export function useTelemetryStream(enabled: boolean = true): TelemetryStreamStat
 
         es.close();
         esRef.current = null;
+        if (stableTimerRef.current !== null) {
+          clearTimeout(stableTimerRef.current);
+          stableTimerRef.current = null;
+        }
 
         setState((prev) => ({
           ...prev,
@@ -142,10 +144,13 @@ export function useTelemetryStream(enabled: boolean = true): TelemetryStreamStat
           reconnecting: true,
         }));
 
-        const delay = Math.min(
+        const base = Math.min(
           INITIAL_RECONNECT_DELAY_MS * Math.pow(2, retryCountRef.current),
           MAX_RECONNECT_DELAY_MS
         );
+        // Randomized jitter (50–100% of base) so many clients dropped by the
+        // same server blip don't reconnect in lockstep and stampede the route.
+        const delay = base * (0.5 + Math.random() * 0.5);
         retryCountRef.current += 1;
 
         retryTimerRef.current = setTimeout(() => {
@@ -163,6 +168,10 @@ export function useTelemetryStream(enabled: boolean = true): TelemetryStreamStat
       if (retryTimerRef.current !== null) {
         clearTimeout(retryTimerRef.current);
         retryTimerRef.current = null;
+      }
+      if (stableTimerRef.current !== null) {
+        clearTimeout(stableTimerRef.current);
+        stableTimerRef.current = null;
       }
       if (esRef.current !== null) {
         esRef.current.close();
