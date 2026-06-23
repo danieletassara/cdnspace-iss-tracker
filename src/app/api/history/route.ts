@@ -17,22 +17,27 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const hours = parseFloat(hoursStr);
-  const points = parseInt(pointsStr, 10);
+  const hoursRaw = parseFloat(hoursStr);
+  const pointsRaw = parseInt(pointsStr, 10);
 
-  if (isNaN(hours) || hours <= 0) {
+  if (isNaN(hoursRaw) || hoursRaw <= 0) {
     return NextResponse.json(
       { error: "Invalid hours value — must be a positive number" },
       { status: 400 }
     );
   }
 
-  if (isNaN(points) || points <= 0) {
+  if (isNaN(pointsRaw) || pointsRaw <= 0) {
     return NextResponse.json(
       { error: "Invalid points value — must be a positive integer" },
       { status: 400 }
     );
   }
+
+  // Clamp to sane upper bounds so this public, unauthenticated endpoint can't
+  // be coerced into an expensive full-table window scan / huge result set.
+  const hours = Math.min(hoursRaw, 24 * 30); // max 30 days
+  const points = Math.min(pointsRaw, 500);
 
   try {
     const history = await getMetricHistory(metric, hours, points);
