@@ -1,11 +1,15 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { getCurrentTle } from "@/lib/pollers/tle-poller";
+import { getCurrentTle, pollTle } from "@/lib/pollers/tle-poller";
 import { propagateFromTle } from "@/lib/pollers/sgp4-propagator";
 
 export async function GET() {
-  const tle = getCurrentTle();
+  // Lazily fetch the TLE if the background pollers haven't loaded it yet, so a
+  // direct hit on a cold server (before any SSE client connects) self-heals
+  // instead of returning 503.
+  let tle = getCurrentTle();
+  if (!tle) tle = await pollTle();
   if (!tle) {
     return NextResponse.json(
       { error: "TLE data not yet available" },

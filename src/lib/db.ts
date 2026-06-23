@@ -277,11 +277,16 @@ export async function archiveOrbitalState(
   const db = getPool();
   const ts = state.timestamp != null ? new Date(state.timestamp) : new Date();
   // Prefer extras.betaAngle (from direct NASA channel) over state.betaAngle
-  // (SGP4-derived), falling back to whichever is defined.
+  // (SGP4-derived), falling back to whichever is defined. A value of 0 means
+  // the Lightstreamer channel hasn't streamed yet (deriveTelemetry's num()
+  // returns 0 for missing channels), so treat 0 as "no data" and fall back to
+  // the SGP4 estimate rather than archiving a fake zero.
   const betaAngle =
-    extras.betaAngle != null
+    extras.betaAngle != null && extras.betaAngle !== 0
       ? extras.betaAngle
-      : (state.betaAngle != null && state.betaAngle !== 0 ? state.betaAngle : null);
+      : state.betaAngle != null && state.betaAngle !== 0
+        ? state.betaAngle
+        : null;
   await db.execute(
     `INSERT INTO orbital_state
        (timestamp, latitude, longitude, altitude, velocity, speed_kmh,
@@ -305,8 +310,11 @@ export async function archiveOrbitalState(
       state.revolutionNumber ?? 0,
       state.isInSunlight ? 1 : 0,
       betaAngle,
-      extras.issMassKg ?? null,
-      extras.momentumPercent ?? null,
+      // 0 here means the NASA channel hasn't streamed — archive null, not a
+      // fake zero, so history/sparklines aren't polluted (ISS mass is never 0,
+      // and momentum % reads 0 only when the channel is absent).
+      extras.issMassKg != null && extras.issMassKg !== 0 ? extras.issMassKg : null,
+      extras.momentumPercent != null && extras.momentumPercent !== 0 ? extras.momentumPercent : null,
       extras.gncDeltaRKm ?? null,
       extras.gncDeltaVMs ?? null,
     ]
@@ -409,40 +417,60 @@ export async function getMetricHistory(
 
   const db = getPool();
 
+  // These numeric values are clamped to safe integers and INTERPOLATED rather
+  // than bound as placeholders. mysql2's binary prepared-statement protocol
+  // sends every JS number as a DOUBLE, which strict MySQL rejects for
+  // INTERVAL ? / LIMIT ? ("Incorrect arguments to mysqld_stmt_execute").
+  // `column` is allowlisted above, so there is no injection surface here.
+  const safeHours = Math.min(Math.max(Math.trunc(hours) || 0, 1), 24 * 30); // 1h..30d
+  const safeMaxPoints = Math.min(Math.max(Math.trunc(maxPoints) || 0, 1), 1000);
+  const safeColumn = column;
+
   // Count total rows in the window first
   const [countRows] = await db.execute<RowDataPacket[]>(
     `SELECT COUNT(*) AS total
      FROM orbital_state
-     WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ? HOUR)`,
-    [hours]
+     WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ${safeHours} HOUR)`
   );
-  const total = (countRows[0]?.total as number) ?? 0;
+  const total = Number(countRows[0]?.total ?? 0);
 
   if (total === 0) return [];
 
-  // Downsample using modulo row numbering when we have more rows than maxPoints
-  const step = total > maxPoints ? Math.floor(total / maxPoints) : 1;
+  const mapRows = (rows: RowDataPacket[]) =>
+    rows.map((r) => ({
+      timestamp: new Date(r.timestamp as string).getTime(),
+      value: r.value as number,
+    }));
 
-  // Use a safe column name (already validated above via allowlist)
-  const safeColumn = column as string;
+  // No downsampling needed — return every row in the window. (The previous
+  // `rn % 1 = 1` predicate matched nothing when total <= maxPoints, so small
+  // windows came back empty and sparklines rendered blank.)
+  if (total <= safeMaxPoints) {
+    const [rows] = await db.execute<RowDataPacket[]>(
+      `SELECT timestamp, ${safeColumn} AS value
+       FROM orbital_state
+       WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ${safeHours} HOUR)
+       ORDER BY timestamp`
+    );
+    return mapRows(rows);
+  }
 
+  // Downsample by selecting every `step`-th row. `(rn - 1) % step = 0` keeps
+  // rows 1, 1+step, 1+2*step, … and is correct for any step >= 1.
+  const step = Math.floor(total / safeMaxPoints);
   const [rows] = await db.execute<RowDataPacket[]>(
-    `SELECT timestamp, ${safeColumn} AS value
+    `SELECT timestamp, value
      FROM (
-       SELECT timestamp, ${safeColumn},
+       SELECT timestamp, ${safeColumn} AS value,
               ROW_NUMBER() OVER (ORDER BY timestamp) AS rn
        FROM orbital_state
-       WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ? HOUR)
+       WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ${safeHours} HOUR)
      ) ranked
-     WHERE rn % ? = 1
-     ORDER BY timestamp`,
-    [hours, step]
+     WHERE (rn - 1) % ${step} = 0
+     ORDER BY timestamp`
   );
 
-  return rows.map((r) => ({
-    timestamp: new Date(r.timestamp as string).getTime(),
-    value: r.value as number,
-  }));
+  return mapRows(rows);
 }
 
 export async function getActiveEvents(): Promise<ISSEvent[]> {
@@ -455,15 +483,43 @@ export async function getActiveEvents(): Promise<ISSEvent[]> {
   return rows.map(rowToEvent);
 }
 
+/** Events overlapping a [startMs, endMs) window — used to build the crew timeline. */
+export async function getEventsForDay(
+  startMs: number,
+  endMs: number
+): Promise<ISSEvent[]> {
+  const db = getPool();
+  const [rows] = await db.execute<RowDataPacket[]>(
+    `SELECT * FROM events
+     WHERE scheduled_start < ? AND scheduled_end > ?
+     ORDER BY scheduled_start`,
+    [new Date(endMs), new Date(startMs)]
+  );
+  return rows.map(rowToEvent);
+}
+
+/** All events, most-recent first — used by the admin panel to list/manage them. */
+export async function getAllEvents(limit = 100): Promise<ISSEvent[]> {
+  const db = getPool();
+  const safeLimit = Math.min(Math.max(Math.trunc(limit) || 0, 1), 500);
+  const [rows] = await db.execute<RowDataPacket[]>(
+    `SELECT * FROM events ORDER BY scheduled_start DESC LIMIT ${safeLimit}`
+  );
+  return rows.map(rowToEvent);
+}
+
 export async function getUpcomingEvents(limit = 5): Promise<ISSEvent[]> {
   const db = getPool();
+  // Interpolate a clamped integer rather than binding `LIMIT ?` — mysql2 sends
+  // numbers as DOUBLE, which strict MySQL rejects for LIMIT. Previously this
+  // could throw and make the whole /api/events response 500.
+  const safeLimit = Math.min(Math.max(Math.trunc(limit) || 0, 1), 100);
   const [rows] = await db.execute<RowDataPacket[]>(
     `SELECT * FROM events
      WHERE scheduled_start >= NOW()
        AND status = 'scheduled'
      ORDER BY scheduled_start
-     LIMIT ?`,
-    [limit]
+     LIMIT ${safeLimit}`
   );
   return rows.map(rowToEvent);
 }
@@ -582,6 +638,27 @@ export async function activateScheduledEvents(): Promise<number> {
 }
 
 /**
+ * Manually set an event's status (admin override). Stamps actual_start when
+ * activating (preserving any existing start) and actual_end when completing.
+ * Returns true if a matching event row was updated.
+ */
+export async function setEventStatus(
+  id: string,
+  status: ISSEvent["status"]
+): Promise<boolean> {
+  const db = getPool();
+  const [result] = await db.execute(
+    `UPDATE events
+     SET status = ?,
+         actual_start = CASE WHEN ? = 'active'    THEN COALESCE(actual_start, NOW()) ELSE actual_start END,
+         actual_end   = CASE WHEN ? = 'completed' THEN NOW() ELSE actual_end END
+     WHERE id = ?`,
+    [status, status, status, id]
+  );
+  return ((result as { affectedRows?: number }).affectedRows ?? 0) > 0;
+}
+
+/**
  * Delete scheduled events that are no longer returned by the upstream API.
  * `currentIds` is the set of event IDs from the latest poll.  Only affects
  * future events sourced from Space Devs so we don't touch historical records
@@ -633,10 +710,13 @@ export async function pruneOldData(retentionDays: number): Promise<number> {
     { name: "iss_telemetry", col: "timestamp" },
   ];
 
+  // Clamp + interpolate the integer (see getMetricHistory for why INTERVAL ?
+  // cannot be bound via execute()). Table/column names are static constants.
+  const safeDays = Math.min(Math.max(Math.trunc(retentionDays) || 0, 1), 3650);
+
   for (const { name, col } of tables) {
     const [result] = await db.execute(
-      `DELETE FROM ${name} WHERE ${col} < DATE_SUB(NOW(), INTERVAL ? DAY)`,
-      [retentionDays]
+      `DELETE FROM ${name} WHERE ${col} < DATE_SUB(NOW(), INTERVAL ${safeDays} DAY)`
     );
     const affected = (result as { affectedRows?: number }).affectedRows ?? 0;
     total += affected;

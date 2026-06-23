@@ -30,10 +30,13 @@ const GM_KM3_S2 = 398600.4418;
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
-// Cache for sunrise/sunset prediction (recomputed every 10s, not every 1s tick)
+// Cache for sunrise/sunset prediction. The expensive orbit scan runs at most
+// every 10s, but we cache the ABSOLUTE transition timestamps (not relative
+// "seconds until") so the countdown returned on every 1s tick keeps
+// decrementing accurately between scans instead of sticking at a stale value.
 let lastSunlightComputeMs = 0;
-let cachedSunriseIn: number | null = null;
-let cachedSunsetIn: number | null = null;
+let cachedSunriseAtMs: number | null = null;
+let cachedSunsetAtMs: number | null = null;
 
 /**
  * Propagate an ISS TLE to a given date and return a complete OrbitalState.
@@ -79,11 +82,16 @@ export function propagateFromTle(tle: TleData, date: Date): OrbitalState | null 
   const eccentricity = parseFloat("0." + tle.line2.substring(26, 33).trim());
   const meanMotionRevPerDay = parseFloat(tle.line2.substring(52, 63).trim());
 
-  // Revolution number — compute from ISS launch date (Nov 20, 1998) since
-  // the TLE field is only 5 digits and wraps at 99999.
-  const ISS_LAUNCH_MS = Date.UTC(1998, 10, 20, 6, 40, 0); // Nov 20, 1998 06:40 UTC
-  const daysSinceLaunch = (date.getTime() - ISS_LAUNCH_MS) / 86_400_000;
-  const revolutionNumber = Math.floor(daysSinceLaunch * meanMotionRevPerDay);
+  // Revolution number — use NORAD's own revolution-at-epoch counter from
+  // TLE line 2 (columns 64–68, 0-indexed substring 63–68) as the base, then
+  // add whole revolutions elapsed since the TLE epoch. This tracks the true
+  // orbit count. (Extrapolating from the 1998 launch date over-counted by
+  // ~3x because mean motion has changed with reboosts/decay over the years.)
+  const revAtEpoch = parseInt(tle.line2.substring(63, 68).trim(), 10) || 0;
+  const epochMs = tleEpochToMs(tle.line1);
+  const elapsedRevs =
+    Math.max(0, (date.getTime() - epochMs) / 86_400_000) * meanMotionRevPerDay;
+  const revolutionNumber = revAtEpoch + Math.floor(elapsedRevs);
 
   // ── Period & semi-major axis ──────────────────────────────────────────────
   const periodSeconds = 86400 / meanMotionRevPerDay;
@@ -93,6 +101,12 @@ export function propagateFromTle(tle: TleData, date: Date): OrbitalState | null 
   const semiMajorAxisKm =
     Math.cbrt((GM_KM3_S2 * periodSeconds ** 2) / (4 * Math.PI ** 2));
 
+  // Apsis altitudes are GEOCENTRIC — height above Earth's mean radius
+  // (EARTH_RADIUS_KM = 6371). This is intentionally a different reference
+  // surface than the live `altitude` above (height above the WGS-84 ellipsoid
+  // from eciToGeodetic), so the two can differ by up to ~7 km: the apsides
+  // describe the orbit's spherical mean shape, not a geodetic height at a
+  // specific latitude.
   const apoapsis = semiMajorAxisKm * (1 + eccentricity) - EARTH_RADIUS_KM;
   const periapsis = semiMajorAxisKm * (1 - eccentricity) - EARTH_RADIUS_KM;
 
@@ -122,17 +136,16 @@ export function propagateFromTle(tle: TleData, date: Date): OrbitalState | null 
   const betaAngle = betaRad * (180 / Math.PI);
 
   // ── Sunrise/Sunset prediction ──────────────────────────────────────────────
-  // Step forward in 30-second increments up to 50 minutes to find the next
-  // sunlight transition. Only recompute every 10 seconds to limit CPU.
-  let sunriseIn: number | null = cachedSunriseIn;
-  let sunsetIn: number | null = cachedSunsetIn;
-
+  // Step forward in 15-second increments up to a full orbit to find the next
+  // sunlight transition. The scan only runs every 10s, but we store the
+  // ABSOLUTE transition time and derive the remaining seconds on every call,
+  // so the countdown decrements smoothly between scans.
   const now = Date.now();
   const shouldRecompute = now - lastSunlightComputeMs > 10_000;
   if (shouldRecompute) {
     lastSunlightComputeMs = now;
-    sunriseIn = null;
-    sunsetIn = null;
+    cachedSunriseAtMs = null;
+    cachedSunsetAtMs = null;
 
     const STEP_SEC = 15;
     const MAX_LOOK_AHEAD_SEC = 95 * 60; // Full orbit to guarantee a transition if one exists
@@ -152,23 +165,31 @@ export function propagateFromTle(tle: TleData, date: Date): OrbitalState | null 
       lastFraction = futureFraction;
 
       if (isInSunlight && !futureInSunlight) {
-        sunsetIn = dt;
+        cachedSunsetAtMs = date.getTime() + dt * 1000;
         break;
       }
       if (!isInSunlight && futureInSunlight) {
-        sunriseIn = dt;
+        cachedSunriseAtMs = date.getTime() + dt * 1000;
         break;
       }
     }
 
-    if (stepsChecked > 0 && sunriseIn === null && sunsetIn === null) {
+    if (stepsChecked > 0 && cachedSunriseAtMs === null && cachedSunsetAtMs === null) {
       // Log once if we scanned the full range without finding a transition
       console.log(`[sgp4] Sunlight scan: ${stepsChecked} steps, no transition found. isInSunlight=${isInSunlight}, lastFraction=${lastFraction.toFixed(4)}, beta=${betaAngle.toFixed(1)}°`);
     }
-
-    cachedSunriseIn = sunriseIn;
-    cachedSunsetIn = sunsetIn;
   }
+
+  // Derive remaining seconds from the cached absolute transition times so the
+  // countdown stays current on every tick (clamped at 0 until the next scan).
+  const sunriseIn =
+    cachedSunriseAtMs != null
+      ? Math.max(0, Math.round((cachedSunriseAtMs - date.getTime()) / 1000))
+      : null;
+  const sunsetIn =
+    cachedSunsetAtMs != null
+      ? Math.max(0, Math.round((cachedSunsetAtMs - date.getTime()) / 1000))
+      : null;
 
   return {
     timestamp: date.getTime(),
@@ -195,4 +216,18 @@ export function propagateFromTle(tle: TleData, date: Date): OrbitalState | null 
 /** Convert a JavaScript Date to a Julian Day Number as expected by satellite.js sunPos(). */
 function dateToJulian(date: Date): number {
   return date.getTime() / 86400000 + 2440587.5;
+}
+
+/**
+ * Parse a TLE epoch (line 1, columns 19–32: "YYDDD.DDDDDDDD") to a UTC
+ * millisecond timestamp. Two-digit years 57–99 map to 1957–1999 and 00–56 to
+ * 2000–2056 (the conventional TLE pivot). Used to count revolutions elapsed
+ * since the element set's epoch.
+ */
+function tleEpochToMs(line1: string): number {
+  const field = line1.substring(18, 32).trim();
+  const yy = parseInt(field.substring(0, 2), 10);
+  const year = yy < 57 ? 2000 + yy : 1900 + yy;
+  const dayOfYear = parseFloat(field.substring(2)); // 1-based day with fraction
+  return Date.UTC(year, 0, 1) + (dayOfYear - 1) * 86_400_000;
 }

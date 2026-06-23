@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { type NextRequest, NextResponse } from "next/server";
-import { getCurrentTle } from "@/lib/pollers/tle-poller";
+import { getCurrentTle, pollTle } from "@/lib/pollers/tle-poller";
 import { predictPasses } from "@/lib/pollers/pass-predictor";
 
 export async function GET(request: NextRequest) {
@@ -44,7 +44,9 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const tle = getCurrentTle();
+  // Lazily fetch the TLE if the background pollers haven't loaded it yet.
+  let tle = getCurrentTle();
+  if (!tle) tle = await pollTle();
   if (!tle) {
     return NextResponse.json(
       { error: "TLE data not yet available" },

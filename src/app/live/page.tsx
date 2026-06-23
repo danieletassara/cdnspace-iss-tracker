@@ -523,6 +523,26 @@ export default function LivePage() {
   const { orbital, telemetry, activeEvent, connected } = useTelemetryStream();
   const hadEventRef = useRef(false);
 
+  // Resolve NASA's current live video id at runtime so the embed self-heals
+  // when the stream is rotated (instead of a hardcoded, eventually-dead id).
+  const [liveVideoId, setLiveVideoId] = useState("uwXgcTc8oY8");
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/live-streams")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { streams?: { id: string; videoId: string }[] } | null) => {
+        if (cancelled || !data?.streams?.length) return;
+        const nasa = data.streams.find((s) => s.id === "nasa") ?? data.streams[0];
+        if (nasa?.videoId) setLiveVideoId(nasa.videoId);
+      })
+      .catch(() => {
+        /* keep fallback id */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Redirect to home when a live event concludes
   useEffect(() => {
     if (activeEvent?.status === "active") {
@@ -663,7 +683,7 @@ export default function LivePage() {
             border: "1px solid rgba(0,229,255,0.15)",
           }}>
             <iframe
-              src="https://www.youtube.com/embed/P9C25Un7xaM?autoplay=1&mute=1&modestbranding=1&rel=0"
+              src={`https://www.youtube.com/embed/${liveVideoId}?autoplay=1&mute=1&modestbranding=1&rel=0`}
               title="NASA ISS Live Stream"
               style={{ width: "100%", height: "100%", border: "none", display: "block" }}
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"

@@ -3,11 +3,12 @@
  * These tests cover pure logic only — no network calls are made.
  */
 
-import { describe, it, expect } from "@jest/globals";
+import { describe, it, expect, jest, afterEach } from "@jest/globals";
 import {
   classifyKp,
   classifyXray,
   classifyRadiationRisk,
+  pollSolarActivity,
 } from "../solar";
 
 // ─── classifyKp ──────────────────────────────────────────────────────────────
@@ -125,5 +126,67 @@ describe("classifyRadiationRisk", () => {
     expect(classifyRadiationRisk(6, 200, 0)).toBe("severe");
     // kp=4 → moderate, xray=1e-5 → high → should be high
     expect(classifyRadiationRisk(4, 0, 1e-5)).toBe("high");
+  });
+});
+
+// ─── pollSolarActivity (network-shape regression) ────────────────────────────
+
+describe("pollSolarActivity", () => {
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+
+  function mockEndpoints(handler: (url: string) => { ok: boolean; status?: number; body?: unknown }) {
+    global.fetch = jest.fn((input: string | URL | Request) => {
+      const { ok, status = 200, body } = handler(String(input));
+      return Promise.resolve({
+        ok,
+        status,
+        json: () => Promise.resolve(body),
+      } as Response);
+    }) as unknown as typeof fetch;
+  }
+
+  it("reads Kp from NOAA's array-of-objects shape (regression: used to always be 0)", async () => {
+    mockEndpoints((url) => {
+      if (url.includes("planetary-k-index")) {
+        return {
+          ok: true,
+          body: [
+            { time_tag: "2026-06-10T00:00:00", Kp: 2, a_running: 7, station_count: 8 },
+            { time_tag: "2026-06-10T03:00:00", Kp: 5.33, a_running: 48, station_count: 8 },
+          ],
+        };
+      }
+      if (url.includes("xray")) {
+        return { ok: true, body: [{ time_tag: "t", flux: 2e-6, energy: "0.1-0.8nm" }] };
+      }
+      return { ok: true, body: [{ time_tag: "t", flux: 0.5, energy: ">=10 MeV" }] };
+    });
+
+    const result = await pollSolarActivity();
+    expect(result).not.toBeNull();
+    expect(result!.kpIndex).toBeCloseTo(5.33, 2);
+    expect(result!.kpLabel).toBe("Storm");
+  });
+
+  it("returns null only when all three endpoints fail", async () => {
+    mockEndpoints(() => ({ ok: false, status: 503 }));
+    expect(await pollSolarActivity()).toBeNull();
+  });
+
+  it("degrades to neutral values when one endpoint fails (others still update)", async () => {
+    mockEndpoints((url) => {
+      if (url.includes("planetary-k-index")) return { ok: false, status: 500 };
+      if (url.includes("xray")) return { ok: true, body: [{ time_tag: "t", flux: 5e-5, energy: "0.1-0.8nm" }] };
+      return { ok: true, body: [{ time_tag: "t", flux: 12, energy: ">=10 MeV" }] };
+    });
+
+    const result = await pollSolarActivity();
+    expect(result).not.toBeNull();
+    expect(result!.kpIndex).toBe(0); // failed channel → neutral
+    expect(result!.xrayClass).toBe("M"); // healthy channel still parsed
+    expect(result!.protonFlux10MeV).toBe(12);
   });
 });

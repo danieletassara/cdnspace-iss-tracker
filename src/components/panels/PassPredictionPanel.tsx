@@ -150,6 +150,12 @@ export default function PassPredictionPanel() {
     if (notifyState !== "on" || passes.length === 0) return;
 
     const check = () => {
+      // Permission can be revoked after the user enabled alerts — downgrade
+      // instead of throwing on every tick.
+      if (typeof Notification !== "undefined" && Notification.permission !== "granted") {
+        setNotifyState("denied");
+        return;
+      }
       const now = Date.now();
       for (const pass of passes) {
         const timeUntil = pass.riseTime - now;
@@ -158,13 +164,20 @@ export default function PassPredictionPanel() {
           timeUntil <= NOTIFY_LEAD_TIME_MS &&
           !notifiedRef.current.has(pass.riseTime)
         ) {
-          notifiedRef.current.add(pass.riseTime);
           const mins = Math.round(timeUntil / 60000);
-          new Notification("ISS Pass Alert", {
-            body: `ISS passes over your location in ${mins} min — max ${pass.maxElevation.toFixed(0)}° elevation (${pass.quality})`,
-            icon: "/ISS_emblem.png",
-            tag: `iss-pass-${pass.riseTime}`,
-          });
+          try {
+            new Notification("ISS Pass Alert", {
+              body: `ISS passes over your location in ${mins} min — max ${pass.maxElevation.toFixed(0)}° elevation (${pass.quality})`,
+              icon: "/ISS_emblem.png",
+              tag: `iss-pass-${pass.riseTime}`,
+            });
+            // Mark notified only after a successful dispatch, so a throw (e.g.
+            // mobile browsers that require ServiceWorkerRegistration) doesn't
+            // permanently swallow the alert for this pass.
+            notifiedRef.current.add(pass.riseTime);
+          } catch {
+            // leave unmarked; retry on the next interval
+          }
         }
       }
     };
@@ -345,8 +358,7 @@ export default function PassPredictionPanel() {
           {t("passes.noPassesFound")}
         </div>
       ) : (
-        <>
-          {passes.map((pass, i) => (
+        passes.map((pass, i) => (
             <div
               key={i}
               style={{
@@ -384,7 +396,7 @@ export default function PassPredictionPanel() {
                       textTransform: "uppercase",
                     }}
                   >
-                    {t(`passes.${pass.quality}`) ?? pass.quality}
+                    {t(`passes.${pass.quality}`)}
                   </div>
                   <div style={{ color: "var(--color-text-muted)", fontSize: 9 }}>
                     {t("passes.magnitude").toLowerCase()} {pass.magnitude.toFixed(1)}
@@ -392,9 +404,6 @@ export default function PassPredictionPanel() {
                 </div>
                 <button
                   onClick={() => {
-                    const dur = Math.round(
-                      (pass.setTime - pass.riseTime) / 60000
-                    );
                     const url = `${window.location.origin}/?pass=${pass.riseTime}`;
                     if (navigator.share) {
                       navigator.share({
@@ -421,10 +430,12 @@ export default function PassPredictionPanel() {
                 </button>
               </div>
             </div>
-          ))}
-          {footer}
-        </>
+          ))
       )}
+      {/* Footer (location / alerts / min-elevation controls) shows in every
+          resolved state — including "no passes" — so the user can always widen
+          the search or toggle alerts, not only when passes already exist. */}
+      {geoState !== "idle" && footer}
     </PanelFrame>
   );
 }

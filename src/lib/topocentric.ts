@@ -132,18 +132,40 @@ export function computeTopocentric(
 
 /** Format RA (hours) as "HH:MM:SS.S". */
 export function formatRA(hours: number): string {
-  const h = Math.floor(hours);
-  const m = Math.floor((hours - h) * 60);
+  let h = Math.floor(hours);
+  let m = Math.floor((hours - h) * 60);
   const s = ((hours - h) * 60 - m) * 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${s.toFixed(1).padStart(4, "0")}`;
+  // Round seconds first, then carry, so a value like 59.97 becomes 00.0 with
+  // the minute incremented rather than rendering an invalid "60.0".
+  let sStr = s.toFixed(1);
+  if (parseFloat(sStr) >= 60) {
+    sStr = "0.0";
+    m += 1;
+    if (m >= 60) {
+      m -= 60;
+      h += 1;
+    }
+  }
+  h = ((h % 24) + 24) % 24; // RA wraps at 24h
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${sStr.padStart(4, "0")}`;
 }
 
 /** Format Dec (degrees) as "±DD°MM'SS"". */
 export function formatDec(degrees: number): string {
   const sign = degrees >= 0 ? "+" : "-";
   const abs = Math.abs(degrees);
-  const d = Math.floor(abs);
-  const m = Math.floor((abs - d) * 60);
+  let d = Math.floor(abs);
+  let m = Math.floor((abs - d) * 60);
   const s = ((abs - d) * 60 - m) * 60;
-  return `${sign}${String(d).padStart(2, "0")}°${String(m).padStart(2, "0")}'${s.toFixed(0).padStart(2, "0")}"`;
+  // Round seconds first, then carry into minutes/degrees to avoid a "60".
+  let sStr = s.toFixed(0);
+  if (parseInt(sStr, 10) >= 60) {
+    sStr = "0";
+    m += 1;
+    if (m >= 60) {
+      m -= 60;
+      d += 1;
+    }
+  }
+  return `${sign}${String(d).padStart(2, "0")}°${String(m).padStart(2, "0")}'${sStr.padStart(2, "0")}"`;
 }

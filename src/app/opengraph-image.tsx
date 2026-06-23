@@ -12,8 +12,11 @@ export default async function OgImage() {
   let speed = "~27,600";
   let lat = "—";
   let lon = "—";
-  let crewCount = "7";
-  let vehicles = "4";
+  // Crew/vehicle counts default to a neutral dash rather than a hardcoded
+  // number — better to show nothing than a stale, unverifiable claim on a card
+  // that advertises "real-time" data.
+  let crewCount = "—";
+  let vehicles = "—";
 
   try {
     const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
@@ -29,6 +32,38 @@ export default async function OgImage() {
     }
   } catch {
     // Use defaults
+  }
+
+  // Live crew + docked-vehicle counts from the same community APIs the app uses.
+  try {
+    const crewRes = await fetch(
+      "https://corquaid.github.io/international-space-station-APIs/JSON/people-in-space.json",
+      { next: { revalidate: 3600 } }
+    );
+    if (crewRes.ok) {
+      const cd = await crewRes.json();
+      const issCrew = Array.isArray(cd.people)
+        ? cd.people.filter((p: { iss?: boolean }) => p.iss).length
+        : 0;
+      if (issCrew > 0) crewCount = String(issCrew);
+    }
+  } catch {
+    // leave as "—"
+  }
+
+  try {
+    const dockRes = await fetch(
+      "https://corquaid.github.io/international-space-station-APIs/JSON/iss-docked-spacecraft.json",
+      { next: { revalidate: 3600 } }
+    );
+    if (dockRes.ok) {
+      const dd = await dockRes.json();
+      if (Array.isArray(dd.spacecraft) && dd.spacecraft.length > 0) {
+        vehicles = String(dd.spacecraft.length);
+      }
+    }
+  } catch {
+    // leave as "—"
   }
 
   return new ImageResponse(

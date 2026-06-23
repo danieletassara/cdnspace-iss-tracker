@@ -32,7 +32,7 @@ function defaultSnapshot(): DashboardLayoutSnapshot {
   };
 }
 
-function defaultState(): StoredPresetsState {
+export function defaultState(): StoredPresetsState {
   return {
     activePresetId: DEFAULT_PRESET_ID,
     presets: [

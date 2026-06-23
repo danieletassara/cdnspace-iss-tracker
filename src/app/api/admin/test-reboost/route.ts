@@ -2,14 +2,8 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { upsertEvent } from "@/lib/db";
+import { isAdminAuthorized } from "@/lib/admin-auth";
 import type { ISSEvent } from "@/lib/types";
-
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "changeme";
-
-function checkAuth(request: NextRequest): boolean {
-  const token = request.headers.get("Authorization")?.replace("Bearer ", "");
-  return token === ADMIN_TOKEN;
-}
 
 /**
  * Insert a fabricated reboost event for UI verification. Matches the shape
@@ -17,7 +11,7 @@ function checkAuth(request: NextRequest): boolean {
  * `source: "manual-test"` so it can be distinguished.
  */
 export async function POST(request: NextRequest) {
-  if (!checkAuth(request)) {
+  if (!isAdminAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

@@ -28,9 +28,9 @@ const endpoints: Endpoint[] = [
   {
     method: "GET",
     path: "/api/telemetry/stream",
-    description: "Server-Sent Events (SSE) stream for real-time telemetry. Emits 'telemetry', 'solar', 'event', and 'visitors' events.",
+    description: "Server-Sent Events (SSE) stream for real-time telemetry. Emits 'telemetry' (orbital + telemetry + active event), 'solar', 'crew', 'docking', and 'visitors' events.",
     params: [],
-    response: "SSE stream — event: telemetry | solar | event | visitors",
+    response: "SSE stream — event: telemetry | solar | crew | docking | visitors",
   },
   {
     method: "GET",

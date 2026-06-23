@@ -14,13 +14,13 @@ interface EventForm {
 }
 
 interface ISSEvent {
-  id: number;
+  id: string;
   type: string;
   title: string;
   description?: string;
-  scheduledStart?: string;
-  scheduledEnd?: string;
-  isActive: boolean;
+  status?: string;
+  scheduledStart?: number;
+  scheduledEnd?: number;
 }
 
 const EVENT_TYPES = ["EVA", "docking", "berthing", "undocking", "launch", "landing", "crew", "experiment", "maintenance", "other"];
@@ -106,12 +106,23 @@ export default function AdminPage() {
     if (!form.title.trim()) { showStatus(t("pages.titleRequired")); return; }
     setLoading(true);
     try {
+      // The server stores events with string ids, numeric (ms) timestamps and a
+      // status — build a complete payload (datetime-local inputs are local time).
+      const startMs = form.scheduledStart
+        ? new Date(form.scheduledStart).getTime()
+        : Date.now();
+      const endMs = form.scheduledEnd
+        ? new Date(form.scheduledEnd).getTime()
+        : startMs + 2 * 60 * 60 * 1000;
       const body: Record<string, unknown> = {
-        type: form.type,
+        id: `admin-${startMs}`,
+        type: form.type.toLowerCase(),
         title: form.title,
-        description: form.description || undefined,
-        scheduledStart: form.scheduledStart || undefined,
-        scheduledEnd: form.scheduledEnd || undefined,
+        description: form.description || form.title,
+        status: startMs <= Date.now() ? "active" : "scheduled",
+        scheduledStart: startMs,
+        scheduledEnd: endMs,
+        metadata: { source: "admin" },
       };
       const res = await fetch("/api/admin/events", {
         method: "POST",
@@ -129,10 +140,10 @@ export default function AdminPage() {
     }
   }
 
-  async function setEventActive(id: number, isActive: boolean) {
+  async function setEventActive(id: string, isActive: boolean) {
     setLoading(true);
     try {
-      const res = await fetch(`/api/admin/events/${id}`, {
+      const res = await fetch(`/api/admin/events/${encodeURIComponent(id)}`, {
         method: "PUT",
         headers,
         body: JSON.stringify({ isActive }),
@@ -348,20 +359,20 @@ export default function AdminPage() {
                       alignItems: "center",
                       gap: 10,
                       padding: "8px 10px",
-                      background: ev.isActive ? "rgba(0,255,136,0.05)" : "rgba(255,255,255,0.02)",
-                      border: `1px solid ${ev.isActive ? "rgba(0,255,136,0.2)" : "rgba(255,255,255,0.06)"}`,
+                      background: ev.status === "active" ? "rgba(0,255,136,0.05)" : "rgba(255,255,255,0.02)",
+                      border: `1px solid ${ev.status === "active" ? "rgba(0,255,136,0.2)" : "rgba(255,255,255,0.06)"}`,
                       borderRadius: 4,
                     }}>
                       <div style={{ fontSize: 9, color: "#8892a4", width: 70 }}>{ev.type?.toUpperCase()}</div>
                       <div style={{ flex: 1, fontSize: 11, color: "#e2e8f0" }}>{ev.title}</div>
-                      {ev.isActive && <div style={{ fontSize: 9, color: "#00ff88", letterSpacing: "0.06em" }}>{t("pages.active")}</div>}
+                      {ev.status === "active" && <div style={{ fontSize: 9, color: "#00ff88", letterSpacing: "0.06em" }}>{t("pages.active")}</div>}
                       <div style={{ display: "flex", gap: 6 }}>
-                        {!ev.isActive && (
+                        {ev.status !== "active" && (
                           <button onClick={() => setEventActive(ev.id, true)} disabled={loading} style={btnStyle("primary")}>
                             {t("pages.activate")}
                           </button>
                         )}
-                        {ev.isActive && (
+                        {ev.status === "active" && (
                           <button onClick={() => setEventActive(ev.id, false)} disabled={loading} style={btnStyle("danger")}>
                             {t("pages.end")}
                           </button>

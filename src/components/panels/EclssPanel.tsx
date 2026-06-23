@@ -194,6 +194,7 @@ function AtmoColumn({ title, o2Mmhg, n2Mmhg, co2Mmhg, totalMmhg, pressurePsi, pr
         border: "1px solid var(--color-border-subtle)",
         borderRadius: 4,
         padding: "6px 8px",
+        minWidth: 0,
       }}
     >
       <div
@@ -263,9 +264,9 @@ export default function EclssPanel({ telemetry }: EclssPanelProps) {
           {t("crew.awaitingTelemetry")}
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, minWidth: 0 }}>
           {/* Atmosphere column — Node 3 and Destiny side by side */}
-          <div>
+          <div style={{ minWidth: 0 }}>
             <div
               style={{
                 color: "var(--color-accent-cyan)",
@@ -277,7 +278,7 @@ export default function EclssPanel({ telemetry }: EclssPanelProps) {
             >
               {t("eclss.atmosphere").toUpperCase()}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, minWidth: 0 }}>
               <AtmoColumn
                 title="NODE 3"
                 o2Mmhg={telemetry.eclss.o2Mmhg}
@@ -297,7 +298,7 @@ export default function EclssPanel({ telemetry }: EclssPanelProps) {
           </div>
 
           {/* Water Recovery column */}
-          <div>
+          <div style={{ minWidth: 0 }}>
             <div
               style={{
                 color: "var(--color-accent-cyan)",
@@ -331,7 +332,7 @@ export default function EclssPanel({ telemetry }: EclssPanelProps) {
           </div>
 
           {/* O2 Generation column */}
-          <div>
+          <div style={{ minWidth: 0 }}>
             <div
               style={{
                 color: "var(--color-accent-cyan)",

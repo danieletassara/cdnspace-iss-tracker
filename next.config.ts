@@ -39,10 +39,9 @@ const nextConfig: NextConfig = {
       {
         source: "/embed",
         headers: [
-          {
-            key: "X-Frame-Options",
-            value: "ALLOWALL",
-          },
+          // "ALLOWALL" is not a valid X-Frame-Options value (browsers ignore
+          // it), so it was a no-op. Framing of /embed is allowed by the CSP
+          // frame-ancestors directive below, which supersedes X-Frame-Options.
           {
             key: "Content-Security-Policy",
             value: "frame-ancestors *",
