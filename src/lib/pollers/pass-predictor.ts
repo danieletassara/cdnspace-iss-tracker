@@ -95,8 +95,11 @@ export function predictPasses(
   let riseAzimuth = 0;
   let maxElevationDeg = 0;
   let maxTime = 0;
-  let maxAzimuth = 0;
   let minRangeSat = Infinity;
+  // Azimuth at the last step that was still above the horizon threshold — used
+  // for the set azimuth so we report where the pass actually dropped out, not
+  // the (already-below-horizon) step that triggers the pass-end branch.
+  let lastInPassAzimuth = 0;
 
   for (let t = now; t <= endTime; t += stepMs) {
     const date = new Date(t);
@@ -114,6 +117,7 @@ export function predictPasses(
     const rangeSat = lookAngles.rangeSat;
 
     if (elevationDeg >= minElevation) {
+      lastInPassAzimuth = azimuthDeg;
       if (!inPass) {
         // Pass start
         inPass = true;
@@ -121,14 +125,12 @@ export function predictPasses(
         riseAzimuth = azimuthDeg;
         maxElevationDeg = elevationDeg;
         maxTime = t;
-        maxAzimuth = azimuthDeg;
         minRangeSat = rangeSat;
       } else {
         // Update peak
         if (elevationDeg > maxElevationDeg) {
           maxElevationDeg = elevationDeg;
           maxTime = t;
-          maxAzimuth = azimuthDeg;
         }
         if (rangeSat < minRangeSat) {
           minRangeSat = rangeSat;
@@ -139,7 +141,7 @@ export function predictPasses(
       inPass = false;
 
       const setTime = t;
-      const setAzimuth = azimuthDeg;
+      const setAzimuth = lastInPassAzimuth;
 
       const magnitude = estimateMagnitude(minRangeSat);
       const quality = classifyPassQuality(maxElevationDeg, magnitude);
@@ -169,7 +171,9 @@ export function predictPasses(
       maxTime,
       maxElevation: maxElevationDeg,
       setTime: endTime,
-      setAzimuth: maxAzimuth,
+      // The pass is truncated by the search window (it never actually set), so
+      // report the last observed in-pass azimuth rather than the peak azimuth.
+      setAzimuth: lastInPassAzimuth,
       magnitude,
       quality,
     });

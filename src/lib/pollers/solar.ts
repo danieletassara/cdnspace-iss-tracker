@@ -59,7 +59,15 @@ export function classifyRadiationRisk(
 
 // ─── Internal NOAA response shapes ───────────────────────────────────────────
 
-type KpEntry = [string, string]; // [time_tag, kp_index]
+// NOAA's planetary K-index product returns an array of objects. (It used to
+// return an array-of-arrays with a leading header row; that format is gone, so
+// indexing `[1]` silently yielded undefined → Kp always parsed as 0.)
+interface KpEntry {
+  time_tag: string;
+  Kp: number;
+  a_running: number;
+  station_count: number;
+}
 
 interface XrayEntry {
   time_tag: string;
@@ -75,58 +83,71 @@ interface ProtonEntry {
 
 // ─── Poller ──────────────────────────────────────────────────────────────────
 
+/** Fetch + parse one NOAA JSON endpoint. Returns null if the request errored,
+ *  the response was not OK (e.g. a 5xx HTML error page), or the body was not
+ *  valid JSON — so one bad endpoint cannot reject the whole batch. */
+async function fetchNoaaJson<T>(
+  url: string,
+  signal: AbortSignal
+): Promise<T | null> {
+  try {
+    const res = await fetch(url, { signal });
+    if (!res.ok) {
+      console.warn(`[solar] ${new URL(url).hostname} returned ${res.status}`);
+      return null;
+    }
+    return (await res.json()) as T;
+  } catch (err) {
+    if ((err as Error).name !== "AbortError") {
+      console.warn(`[solar] fetch failed for ${url}:`, (err as Error).message ?? err);
+    }
+    return null;
+  }
+}
+
 /**
- * Fetch space weather data from three NOAA SWPC endpoints in parallel.
- * Returns a SolarActivity snapshot, or null on any unrecoverable error.
+ * Fetch space weather data from three NOAA SWPC endpoints.
+ *
+ * Each endpoint is fetched independently: a single outage degrades only that
+ * channel (which falls back to a neutral 0) rather than wiping the whole
+ * snapshot. Returns null only if ALL three fail, so the caller keeps its last
+ * good data instead of clobbering it with all-zero readings.
  */
 export async function pollSolarActivity(): Promise<SolarActivity | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
 
   try {
-    const [kpRes, xrayRes, protonRes] = await Promise.all([
-      fetch(NOAA_KP_URL, { signal: controller.signal }),
-      fetch(NOAA_XRAY_URL, { signal: controller.signal }),
-      fetch(NOAA_PROTON_URL, { signal: controller.signal }),
+    const [kpData, xrayData, protonData] = await Promise.all([
+      fetchNoaaJson<KpEntry[]>(NOAA_KP_URL, controller.signal),
+      fetchNoaaJson<XrayEntry[]>(NOAA_XRAY_URL, controller.signal),
+      fetchNoaaJson<ProtonEntry[]>(NOAA_PROTON_URL, controller.signal),
     ]);
 
-    const [kpData, xrayData, protonData]: [
-      KpEntry[],
-      XrayEntry[],
-      ProtonEntry[]
-    ] = await Promise.all([
-      kpRes.json(),
-      xrayRes.json(),
-      protonRes.json(),
-    ]);
+    if (!kpData && !xrayData && !protonData) return null;
 
-    // ── Kp: last non-header entry ─────────────────────────────────────────
-    // NOAA returns an array where index 0 is a header row; real data follows.
-    const kpEntries = kpData.filter((row) => row[0] !== "time_tag");
-    const latestKp = kpEntries[kpEntries.length - 1];
-    const kpIndex = parseFloat(latestKp?.[1] ?? "0");
+    if (!kpData || !xrayData || !protonData) {
+      console.warn(
+        `[solar] Partial space-weather data (kp=${!!kpData}, xray=${!!xrayData}, proton=${!!protonData}); missing channels default to 0`
+      );
+    }
+
+    // ── Kp: last entry's Kp value (array-of-objects shape) ─────────────────
+    const kpIndex = Array.isArray(kpData) ? kpData.at(-1)?.Kp ?? 0 : 0;
 
     // ── X-ray: last entry with flux (short-wavelength 0.1–0.8 nm band) ───
-    const xrayEntries = xrayData.filter(
-      (e) => e.energy === "0.1-0.8nm" && typeof e.flux === "number"
-    );
-    const latestXray = xrayEntries[xrayEntries.length - 1];
-    const xrayFlux = latestXray?.flux ?? 0;
+    const xrayFlux =
+      (xrayData ?? [])
+        .filter((e) => e.energy === "0.1-0.8nm" && typeof e.flux === "number")
+        .at(-1)?.flux ?? 0;
 
     // ── Proton: separate channels by energy band ──────────────────────────
-    const latestProton1 = protonData
-      .filter((e) => e.energy === ">=1 MeV")
-      .at(-1);
-    const latestProton10 = protonData
-      .filter((e) => e.energy === ">=10 MeV")
-      .at(-1);
-    const latestProton100 = protonData
-      .filter((e) => e.energy === ">=100 MeV")
-      .at(-1);
-
-    const protonFlux1MeV = latestProton1?.flux ?? 0;
-    const protonFlux10MeV = latestProton10?.flux ?? 0;
-    const protonFlux100MeV = latestProton100?.flux ?? 0;
+    const protonFlux1MeV =
+      (protonData ?? []).filter((e) => e.energy === ">=1 MeV").at(-1)?.flux ?? 0;
+    const protonFlux10MeV =
+      (protonData ?? []).filter((e) => e.energy === ">=10 MeV").at(-1)?.flux ?? 0;
+    const protonFlux100MeV =
+      (protonData ?? []).filter((e) => e.energy === ">=100 MeV").at(-1)?.flux ?? 0;
 
     const kpLabel = classifyKp(kpIndex);
     const xrayClass = classifyXray(xrayFlux);
