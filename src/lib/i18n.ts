@@ -170,6 +170,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, Record<string, string>>
       exercise: "Exercise",
       meal: "Meal",
       eva: "EVA",
+      routineNote: "Representative GMT routine · scheduled events shown live",
     },
     upcoming: {
       loadingEvents: "Loading events…",
@@ -444,6 +445,7 @@ export const TRANSLATIONS: Record<Locale, Record<string, Record<string, string>>
       exercise: "Exercice",
       meal: "Repas",
       eva: "EVA",
+      routineNote: "Routine GMT représentative · événements planifiés en direct",
     },
     upcoming: {
       loadingEvents: "Chargement des événements…",

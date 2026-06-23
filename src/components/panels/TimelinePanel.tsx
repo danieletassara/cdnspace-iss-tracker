@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import PanelFrame from "@/components/shared/PanelFrame";
 import type { ActivityType, TimelineActivity } from "@/lib/types";
+import { buildDayTimeline, utcDayStart } from "@/lib/timeline";
 import { useLocale } from "@/context/LocaleContext";
 
 const ACTIVITY_COLORS: Record<ActivityType, string> = {
@@ -17,50 +18,67 @@ const ACTIVITY_COLORS: Record<ActivityType, string> = {
   other: "#4a5568",
 };
 
-function makeSampleActivities(): TimelineActivity[] {
-  const today = new Date();
-  const base = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const t = (h: number, m = 0) => base.getTime() + (h * 60 + m) * 60 * 1000;
-
-  return [
-    { name: "Sleep", type: "sleep", startTime: t(0), endTime: t(6) },
-    { name: "Morning Hygiene", type: "other", startTime: t(6), endTime: t(7) },
-    { name: "Breakfast", type: "meal", startTime: t(7), endTime: t(7, 30) },
-    { name: "DPC", type: "dpc", startTime: t(7, 30), endTime: t(8) },
-    { name: "Science — MISSE", type: "science", startTime: t(8), endTime: t(11) },
-    { name: "Lunch", type: "meal", startTime: t(11), endTime: t(11, 45) },
-    { name: "Exercise", type: "exercise", startTime: t(11, 45), endTime: t(13) },
-    { name: "Science — Veggie", type: "science", startTime: t(13), endTime: t(15, 30) },
-    { name: "Dinner", type: "meal", startTime: t(15, 30), endTime: t(16) },
-    { name: "Off Duty", type: "off-duty", startTime: t(16), endTime: t(18) },
-    { name: "Pre-sleep", type: "other", startTime: t(18), endTime: t(18, 30) },
-    { name: "Sleep", type: "sleep", startTime: t(18, 30), endTime: t(24) },
-  ];
-}
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export default function TimelinePanel() {
   const { t } = useLocale();
-  const activities = useMemo(() => makeSampleActivities(), []);
-
-  const DAY_MS = 24 * 60 * 60 * 1000;
-  const dayStart = useMemo(() => {
-    const d = new Date();
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  }, []);
+  // dayStart/activities are populated client-side (the ISS day is GMT-based and
+  // Date.now() in render would risk a hydration mismatch), so SSR renders an
+  // empty axis that fills in immediately on mount.
+  const [dayStart, setDayStart] = useState<number | null>(null);
+  const [activities, setActivities] = useState<TimelineActivity[]>([]);
   const [nowFrac, setNowFrac] = useState<number | null>(null);
 
+  // Load the live timeline (representative GMT routine + real scheduled events)
+  // and refresh every 5 minutes so it stays current as events change.
+  useEffect(() => {
+    let cancelled = false;
+
+    const applyFallback = () => {
+      if (cancelled) return;
+      const ds = utcDayStart(Date.now());
+      setDayStart(ds);
+      setActivities(buildDayTimeline(ds, []));
+    };
+
+    function load() {
+      fetch("/api/timeline")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { dayStart: number; activities: TimelineActivity[] } | null) => {
+          if (cancelled) return;
+          if (data?.activities?.length && typeof data.dayStart === "number") {
+            setDayStart(data.dayStart);
+            setActivities(data.activities);
+          } else {
+            applyFallback();
+          }
+        })
+        .catch(applyFallback);
+    }
+
+    load();
+    const id = setInterval(load, 5 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  // NOW marker, updated every 30s (client-only).
   useEffect(() => {
     const update = () => {
-      const now = new Date();
-      const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-      setNowFrac(Math.max(0, Math.min(1, (now.getTime() - dayStart) / DAY_MS)));
+      if (dayStart == null) {
+        setNowFrac(null);
+        return;
+      }
+      const frac = (Date.now() - dayStart) / DAY_MS;
+      setNowFrac(frac >= 0 && frac <= 1 ? frac : null);
     };
     update();
     const id = setInterval(update, 30_000);
     return () => clearInterval(id);
-  }, []);
+  }, [dayStart]);
 
-  // hour labels
   const hourLabels = [0, 4, 8, 12, 16, 20, 24];
 
   return (
@@ -68,8 +86,13 @@ export default function TimelinePanel() {
       title={t("panels.crewTimeline").toUpperCase()}
       icon="📅"
       accentColor="var(--color-accent-purple)"
+      headerRight={
+        <span style={{ fontSize: 8, color: "var(--color-text-muted)", letterSpacing: "0.1em" }}>
+          GMT
+        </span>
+      }
     >
-      {/* Hour labels */}
+      {/* Hour labels (GMT) */}
       <div
         style={{
           position: "relative",
@@ -79,10 +102,7 @@ export default function TimelinePanel() {
         }}
       >
         {hourLabels.map((h) => (
-          <span
-            key={h}
-            style={{ color: "var(--color-text-muted)", fontSize: 8 }}
-          >
+          <span key={h} style={{ color: "var(--color-text-muted)", fontSize: 8 }}>
             {String(h).padStart(2, "0")}:00
           </span>
         ))}
@@ -99,26 +119,29 @@ export default function TimelinePanel() {
           border: "1px solid var(--color-border-subtle)",
         }}
       >
-        {activities.map((act, i) => {
-          const leftFrac = (act.startTime - dayStart) / DAY_MS;
-          const widthFrac = (act.endTime - act.startTime) / DAY_MS;
-          if (leftFrac >= 1 || widthFrac <= 0) return null;
-          return (
-            <div
-              key={i}
-              title={act.name}
-              style={{
-                position: "absolute",
-                top: 0,
-                bottom: 0,
-                left: `${leftFrac * 100}%`,
-                width: `${widthFrac * 100}%`,
-                background: ACTIVITY_COLORS[act.type],
-                opacity: 0.85,
-              }}
-            />
-          );
-        })}
+        {dayStart != null &&
+          activities.map((act, i) => {
+            const leftFrac = (act.startTime - dayStart) / DAY_MS;
+            const widthFrac = (act.endTime - act.startTime) / DAY_MS;
+            if (leftFrac >= 1 || leftFrac + widthFrac <= 0 || widthFrac <= 0) return null;
+            const clampedLeft = Math.max(0, leftFrac);
+            const clampedWidth = Math.min(1, leftFrac + widthFrac) - clampedLeft;
+            return (
+              <div
+                key={i}
+                title={act.name}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: `${clampedLeft * 100}%`,
+                  width: `${clampedWidth * 100}%`,
+                  background: ACTIVITY_COLORS[act.type],
+                  opacity: 0.85,
+                }}
+              />
+            );
+          })}
 
         {/* NOW marker (client-only to avoid hydration mismatch) */}
         {nowFrac !== null && (
@@ -155,10 +178,7 @@ export default function TimelinePanel() {
             ["eva", t("timeline.eva")],
           ] as [ActivityType, string][]
         ).map(([type, label]) => (
-          <div
-            key={type}
-            style={{ display: "flex", alignItems: "center", gap: 3 }}
-          >
+          <div key={type} style={{ display: "flex", alignItems: "center", gap: 3 }}>
             <span
               style={{
                 display: "inline-block",
@@ -168,11 +188,14 @@ export default function TimelinePanel() {
                 background: ACTIVITY_COLORS[type],
               }}
             />
-            <span style={{ color: "var(--color-text-muted)", fontSize: 8 }}>
-              {label}
-            </span>
+            <span style={{ color: "var(--color-text-muted)", fontSize: 8 }}>{label}</span>
           </div>
         ))}
+      </div>
+
+      {/* Honest provenance note: routine is representative; events are real. */}
+      <div style={{ color: "var(--color-text-muted)", fontSize: 8, marginTop: 4, fontStyle: "italic" }}>
+        {t("timeline.routineNote")}
       </div>
     </PanelFrame>
   );
