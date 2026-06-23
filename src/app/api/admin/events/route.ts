@@ -1,22 +1,28 @@
 export const dynamic = "force-dynamic";
 
 import { type NextRequest, NextResponse } from "next/server";
-import { upsertEvent } from "@/lib/db";
+import { getAllEvents, upsertEvent } from "@/lib/db";
+import { isAdminAuthorized } from "@/lib/admin-auth";
 import type { ISSEvent } from "@/lib/types";
 
-function isAuthorized(request: NextRequest): boolean {
-  const adminToken = process.env.ADMIN_TOKEN;
-  if (!adminToken) return false;
-
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader) return false;
-
-  const [scheme, token] = authHeader.split(" ");
-  return scheme === "Bearer" && token === adminToken;
+export async function GET(request: NextRequest) {
+  if (!isAdminAuthorized(request)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  try {
+    const events = await getAllEvents(200);
+    return NextResponse.json(events);
+  } catch (err) {
+    console.error("[admin/events] list error:", err);
+    return NextResponse.json(
+      { error: "Failed to list events" },
+      { status: 500 }
+    );
+  }
 }
 
 async function handleUpsert(request: NextRequest): Promise<NextResponse> {
-  if (!isAuthorized(request)) {
+  if (!isAdminAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
