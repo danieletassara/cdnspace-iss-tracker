@@ -18,6 +18,7 @@ import {
 import {
   StoredPresetsState,
   DashboardLayoutSnapshot,
+  defaultState,
   readStoredPresetsState,
   writeStoredPresetsState,
   getSnapshotForPresetId,
@@ -29,9 +30,10 @@ import PanelVisibilityModal from "@/components/modals/PanelVisibilityModal";
 import { useBuildCheck } from "@/hooks/useBuildCheck";
 
 function useLayoutPresets() {
-  const [presetsState, setPresetsState] = useState<StoredPresetsState>(() =>
-    readStoredPresetsState()
-  );
+  // Initialize to the deterministic default (matching panelVisibility/columns
+  // below) and load from localStorage in the mount effect — avoids reading
+  // storage and minting UUIDs during render.
+  const [presetsState, setPresetsState] = useState<StoredPresetsState>(defaultState);
   const [panelVisibility, setPanelVisibility] = useState<Record<PanelId, boolean>>(
     () => defaultPanelVisibility()
   );
@@ -231,6 +233,14 @@ export function Dashboard() {
         {panelVisibility.solarArrays && <SolarArrayPanel telemetry={stream.telemetry} />}
         {panelVisibility.eclss && <EclssPanel telemetry={stream.telemetry} />}
         {panelVisibility.attitude && <AttitudePanel telemetry={stream.telemetry} />}
+        {panelVisibility.moduleTemps && <ModuleTempsPanel telemetry={stream.telemetry} />}
+        {panelVisibility.tdrs && <TdrsPanel orbital={stream.orbital} />}
+        {panelVisibility.comms && <CommsPanel telemetry={stream.telemetry} />}
+        {panelVisibility.canadarm && <Canadarm2Panel telemetry={stream.telemetry} />}
+        {panelVisibility.airlock && <AirlockPanel telemetry={stream.telemetry} />}
+        {panelVisibility.russianSegment && <RussianSegmentPanel telemetry={stream.telemetry} />}
+        {panelVisibility.systemsHealth && <SystemsHealthPanel telemetry={stream.telemetry} />}
+        {panelVisibility.evaBattery && <EvaBatteryPanel telemetry={stream.telemetry} evaActive={(stream.activeEvent?.type ?? activeEvent?.type) === "eva"} />}
       </div>
 
       {/* Left column — Where is the ISS? (navigation & environment) */}

@@ -14,16 +14,12 @@ export default function manifest(): MetadataRoute.Manifest {
     categories: ["education", "science"],
     icons: [
       {
+        // Actual asset is 1891x1891; declaring the true size avoids installers
+        // rejecting it on a size mismatch.
         src: "/ISS_emblem.png",
-        sizes: "512x512",
+        sizes: "1891x1891",
         type: "image/png",
         purpose: "any",
-      },
-      {
-        src: "/icon.png",
-        sizes: "512x512",
-        type: "image/png",
-        purpose: "maskable",
       },
     ],
   };

@@ -14,6 +14,7 @@ const AGENCY_COLOR: Record<string, string> = {
   ESA: "var(--color-accent-yellow)",
   JAXA: "var(--color-accent-green)",
   CSA: "var(--color-accent-orange)",
+  SpaceX: "var(--color-accent-purple)",
 };
 
 interface CrewRosterPanelProps {

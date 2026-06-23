@@ -11,6 +11,7 @@ const AGENCY_COLOR: Record<string, string> = {
   ESA: "var(--color-accent-yellow)",
   JAXA: "var(--color-accent-green)",
   CSA: "var(--color-accent-orange)",
+  SpaceX: "var(--color-accent-purple)",
 };
 
 const AGENCY_BG: Record<string, string> = {
@@ -19,6 +20,7 @@ const AGENCY_BG: Record<string, string> = {
   ESA: "rgba(255,214,0,0.12)",
   JAXA: "rgba(0,255,136,0.12)",
   CSA: "rgba(255,140,0,0.12)",
+  SpaceX: "rgba(167,139,250,0.14)",
 };
 
 interface CrewModalProps {
