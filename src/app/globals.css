@@ -114,11 +114,17 @@ body {
   border: 1px solid var(--color-border-accent);
   border-radius: 6px;
   background-color: var(--color-bg-panel);
-  /* min-width:0 lets a panel shrink inside its grid column instead of forcing
-     the track wider; overflow:hidden clips any internal content (e.g. wide
-     ECLSS gauge readouts) at the panel edge so it never spills over neighbors. */
+  /* min-width:0 lets a panel shrink horizontally inside its grid column instead
+     of forcing the track wider; overflow-x:clip contains horizontal spill (e.g.
+     wide ECLSS gauge readouts) without clipping vertical content.
+     flex-shrink:0 is critical: in the scrolling flex columns
+     (.col-*: overflow-y:auto), panels must keep their full content height and
+     let the COLUMN scroll. Adding overflow above removed the implicit
+     min-height:auto (min-content) protection, which let panels shrink and crop
+     their own content — flex-shrink:0 restores that intended behavior. */
   min-width: 0;
-  overflow: hidden;
+  overflow-x: clip;
+  flex-shrink: 0;
 }
 
 .panel-header {

@@ -86,7 +86,7 @@ export default function LiveVideoPanel() {
       headerRight={cameraToggle}
       bodyClassName=""
     >
-      <div style={{ position: "relative", paddingBottom: "56.25%", height: 0 }}>
+      <div style={{ position: "relative", width: "100%", aspectRatio: "16 / 9" }}>
         <iframe
           key={`${active.videoId}-${cacheBuster}`}
           src={`https://www.youtube.com/embed/${active.videoId}?autoplay=1&mute=1&controls=1&rel=0&_=${cacheBuster}`}
