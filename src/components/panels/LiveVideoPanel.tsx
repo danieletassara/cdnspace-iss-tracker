@@ -4,26 +4,53 @@ import { useState, useEffect } from "react";
 import PanelFrame from "@/components/shared/PanelFrame";
 import { useLocale } from "@/context/LocaleContext";
 
-// ISS live streams
-const STREAMS = [
-  { id: "sWasdbDVNvc", label: "Live Earth" },
-  { id: "zPH5KtjJFaQ", label: "HD" },
-  { id: "fO9e9jnhYK8", label: "SEN" },
-] as const;
+interface Stream {
+  id: string;
+  label: string;
+  videoId: string;
+}
+
+// Seed list used until /api/live-streams resolves the current ids (and if it
+// fails). The API resolves each channel's CURRENT live video so the embed
+// self-heals when NASA/Sen rotate their stream ids.
+const FALLBACK_STREAMS: Stream[] = [
+  { id: "nasa", label: "NASA ISS", videoId: "uwXgcTc8oY8" },
+  { id: "sen", label: "Sen 4K", videoId: "fO9e9jnhYK8" },
+];
 
 export default function LiveVideoPanel() {
   const { t } = useLocale();
+  const [streams, setStreams] = useState<Stream[]>(FALLBACK_STREAMS);
   const [activeIdx, setActiveIdx] = useState(0);
   // Cache-buster forces fresh iframe on mount and stream switch
   const [cacheBuster, setCacheBuster] = useState(() => Date.now());
 
   useEffect(() => {
+    let cancelled = false;
+    fetch("/api/live-streams")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { streams?: Stream[] } | null) => {
+        if (cancelled || !data?.streams?.length) return;
+        setStreams(data.streams);
+        setActiveIdx((i) => Math.min(i, data.streams!.length - 1));
+      })
+      .catch(() => {
+        /* keep fallback streams */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     setCacheBuster(Date.now());
   }, [activeIdx]);
 
+  const active = streams[activeIdx] ?? streams[0];
+
   const cameraToggle = (
     <div style={{ display: "flex", gap: 3 }}>
-      {STREAMS.map((stream, i) => (
+      {streams.map((stream, i) => (
         <button
           key={stream.id}
           onClick={() => setActiveIdx(i)}
@@ -61,9 +88,9 @@ export default function LiveVideoPanel() {
     >
       <div style={{ position: "relative", paddingBottom: "56.25%", height: 0 }}>
         <iframe
-          key={`${STREAMS[activeIdx].id}-${cacheBuster}`}
-          src={`https://www.youtube.com/embed/${STREAMS[activeIdx].id}?autoplay=1&mute=1&controls=1&rel=0&_=${cacheBuster}`}
-          title={`NASA ISS — ${STREAMS[activeIdx].label}`}
+          key={`${active.videoId}-${cacheBuster}`}
+          src={`https://www.youtube.com/embed/${active.videoId}?autoplay=1&mute=1&controls=1&rel=0&_=${cacheBuster}`}
+          title={`ISS Live — ${active.label}`}
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowFullScreen
           style={{
